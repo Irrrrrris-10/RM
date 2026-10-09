@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>电控第一次作业 说明文档</title>
+<style>
+  body{font-family:"宋体",SimSun,serif;font-size:11pt;line-height:1.7;margin:2cm;}
+  h1{font-family:"黑体",SimHei;font-size:20pt;text-align:center;}
+  h2{font-family:"黑体",SimHei;font-size:14pt;margin-top:18pt;}
+  h3{font-family:"黑体",SimHei;font-size:12pt;}
+  table{border-collapse:collapse;width:100%;font-size:10.5pt;}
+  th,td{border:1px solid #444;padding:4px 8px;text-align:left;}
+  th{background:#eee;}
+  pre{background:#f4f4f4;border:1px solid #ccc;padding:8px;font-family:Consolas,monospace;font-size:10pt;white-space:pre-wrap;}
+  .formula{background:#f8f8f8;border-left:3px solid #888;padding:6px 10px;margin:6px 0;font-family:Consolas,monospace;}
+  .cap{text-align:center;font-size:10pt;color:#333;margin:6px 0 14px;}
+  img{max-width:100%;border:1px solid #ccc;}
+</style>
+</head>
+<body>
+
+<h1>电控第一次作业 说明文档</h1>
+
+<table>
+  <tr><td>开发板</td><td>STM32F103C8T6 最小系统板</td><td>芯片型号</td><td>STM32F103C8Tx</td></tr>
+  <tr><td>系统主频</td><td>72 MHz</td><td>定时器</td><td>TIM2（APB1，1 ms 更新中断）</td></tr>
+  <tr><td>看门狗</td><td>IWDG，分频 64，Reload 1249，约 2 s</td><td>调试器</td><td>DAPLink（CMSIS-DAP）+ Ozone V3.26</td></tr>
+</table>
+
+<p>三题做在同一个 CubeMX 工程里，业务代码只写在 <code>Tasks/</code> 下。</p>
+
+<h2>1. 工程结构</h2>
+<pre>first_CMake/
+├─ Core/                     # CubeMX 生成，只改 main.c 的 USER CODE 区
+│  ├─ Inc/   main.h  stm32f1xx_hal_conf.h  stm32f1xx_it.h
+│  └─ Src/   main.c  stm32f1xx_it.c  stm32f1xx_hal_msp.c  system_stm32f1xx.c ...
+├─ Drivers/                  # STM32F1 HAL + CMSIS，不修改
+├─ cmake/                    # CubeMX 生成的 CMake 配置
+├─ Tasks/                    # ★ 业务代码只在这里
+│  ├─ inc/main_task.hpp
+│  └─ src/main_task.cpp
+├─ CMakeLists.txt            # 发放模板，user_folders 保持 "Tasks"
+└─ build/                    # 构建输出，含 project.elf</pre>
+<p>main.c 只在 USER CODE 区包含头文件并调用 <code>MainInit()</code>，<code>while(1)</code> 保持为空。全局变量 <code>tick</code>、定时器更新回调、GPIO 电平全部写在 Tasks 里。</p>
+
+<h2>2. 时钟树与定时器时钟来源</h2>
+<pre>HSE 8 MHz ──► PLL ×9 ──► SYSCLK = 72 MHz ──► AHB /1 ──► HCLK = 72 MHz
+                                              ├─ APB1 /2 ──► PCLK1 = 36 MHz
+                                              │             └─ APB1 Timer clocks = 72 MHz ← TIM2 用这个
+                                              └─ APB2 /1 ──► PCLK2 = 72 MHz</pre>
+<p><b>关键点</b>：TIM2 挂在 <b>APB1</b> 上；当 APB1 的分频系数 <b>不为 1</b> 时，送到定时器的时钟是 APB1 的 <b>2 倍</b>：<b>f_TIM2 = 2 × 36 MHz = 72 MHz</b>。</p>
+<p>这个 72 MHz 就是后面计算 PSC、ARR 所用的定时器时钟（以 CubeMX 时钟树显示的 “APB1 Timer clocks” 为准）。</p>
+
+<h2>3. 第 1 题：GPIO</h2>
+<ul>
+  <li>CubeMX 里把 <b>PC13</b> 配置为 <b>推挽输出（Output Push Pull）</b>；</li>
+  <li>F103 蓝板板载 LED 接在 PC13，<b>低电平点亮</b>；</li>
+  <li>在 Tasks 的初始化 <code>MainInit()</code> 里把它写成<b>低电平</b>（不在 while(1) 里翻转）。</li>
+</ul>
+<pre>void MainInit(void)
+{
+  /* 低电平点亮板载 LED */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+  ...
+}</pre>
+<p><b>现象</b>：板载 LED 常亮（见附录 图 1）。</p>
+
+<h2>4. 第 2 题：定时器 1 ms 更新中断与 tick</h2>
+<h3>4.1 PSC / ARR 计算过程</h3>
+<p>TIM2 的更新中断周期：</p>
+<div class="formula">T_up = (PSC + 1) × (ARR + 1) / f_TIM2</div>
+<p>要求 T_up = 1 ms，f_TIM2 = 72 MHz，则：</p>
+<div class="formula">(PSC + 1)(ARR + 1) = f_TIM2 × T_up = 72 000 000 × 0.001 = 72000</div>
+<p>取整数分频 PSC + 1 = 72，则：</p>
+<div class="formula">PSC = 71，ARR + 1 = 72000 / 72 = 1000 ⇒ ARR = 999</div>
+<p>代入验算：</p>
+<div class="formula">T_up = (71 + 1) × (999 + 1) / 72 000 000 = 72000 / 72 000 000 = 0.001 s = 1 ms ✔</div>
+<p>CubeMX 中设置：TIM2 → Prescaler = 71，Counter Period = 999，并在 NVIC 里使能 <b>TIM2 global interrupt</b>。</p>
+
+<h3>4.2 全局 tick</h3>
+<p>按题目要求，变量名必须叫 <code>tick</code>，类型为全局 <code>volatile uint32_t</code>：</p>
+<pre>extern "C" {
+volatile uint32_t tick = 0;
+}</pre>
+<p>volatile 防止编译器把自增优化掉；用 extern "C" 保证导出符号名就是 tick，Ozone 里可直接按名字监视。</p>
+
+<h3>4.3 Tasks 里的定时器更新回调（全工程只写这一份）</h3>
+<pre>extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  if (htim->Instance == TIM2) {
+    tick = tick + 1;              /* 每 1 ms 加 1 → 约 1000/s */
+
+    /* 第 2 题：喂狗（第 3 题时注释掉） */
+    HAL_IWDG_Refresh(&hiwdg);
+  }
+}</pre>
+<p>用 C++ 写回调必须加 <b>extern "C"</b>，否则覆盖不了 HAL 的弱符号；回调只保留这一份；没有用 HAL_Delay 或空循环去加 tick。</p>
+
+<h3>4.4 启动定时器</h3>
+<pre>void MainInit(void)
+{
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+  HAL_TIM_Base_Start_IT(&htim2);   /* 启动 1ms 更新中断 */
+}</pre>
+<p><b>现象</b>：Ozone 运行态下，tick 每秒约增加 1000（见附录 图 2）。</p>
+
+<h2>5. 第 3 题：看门狗 IWDG</h2>
+<h3>5.1 超时计算</h3>
+<p>IWDG 由 LSI（内部低速时钟）驱动，F103 的 LSI 约 40 kHz。超时时间：</p>
+<div class="formula">T_out = (Reload + 1) × 分频系数 / f_LSI</div>
+<p>取分频系数 = 64、Reload = 1249：</p>
+<div class="formula">T_out = (1249 + 1) × 64 / 40 000 = 80 000 / 40 000 = 2.0 s</div>
+<p>CubeMX 设置：Prescaler = IWDG_PRESCALER_64，Reload = 1249，超时约 2 s。</p>
+
+<h3>5.2 现象与验证</h3>
+<ul>
+  <li>第 2 题中，回调每 1 ms 调用一次 HAL_IWDG_Refresh(&amp;hiwdg) 喂狗，tick 持续增长；</li>
+  <li>第 3 题 <b>去掉回调里的 HAL_IWDG_Refresh</b>，重新编译下载后：芯片约 2 s 得不到喂狗 → IWDG 溢出 → MCU 复位；复位后启动代码把全局变量清零，所以 <b>tick 从 0 涨到约 2000，然后回到 0，不断重复</b>；</li>
+  <li>用 Ozone 观察时让程序运行、不要停在断点上（CPU 停住时看门狗仍在计数，会掉线）。</li>
+</ul>
+<p><b>现象</b>：tick 呈锯齿状，涨到约 2000 后归零、循环（见附录 图 3）。</p>
+
+<h2>6. 三题与配置小结</h2>
+<table>
+  <tr><th>题</th><th>外设/变量</th><th>配置</th><th>现象</th></tr>
+  <tr><td>1 GPIO</td><td>PC13</td><td>推挽输出，写低电平</td><td>板载 LED 常亮</td></tr>
+  <tr><td>2 定时器</td><td>TIM2</td><td>PSC=71, ARR=999 → 1 ms；回调 tick++ + 喂狗</td><td>tick 约 1000/s</td></tr>
+  <tr><td>3 看门狗</td><td>IWDG</td><td>分频 64, Reload 1249 → 2 s；回调去掉喂狗</td><td>tick 涨到约 2000 后归零</td></tr>
+</table>
+
+<h2 style="page-break-before:always">附录（图）</h2>
+<p>说明文档只在附录放图。</p>
+
+<h3>图 1（GPIO）：板载 LED 点亮</h3>
+<img src="附图/附图1.jpg" alt="图1">
+<p class="cap">图 1　板载 LED 常亮</p>
+
+<h3>图 2（定时器）：tick 约每秒增加 1000</h3>
+<img src="附图/附图2.1.png" alt="图2.1">
+<p class="cap">图 2-1　tick 采样数据（Time 与 tick）</p>
+<img src="附图/附图2.2.png" alt="图2.2">
+<p class="cap">图 2-2　tick 随时间上升的曲线（约 1000/s）</p>
+
+<h3>图 3（看门狗）：tick 涨到约 2000 后归零</h3>
+<img src="附图/附图3.png" alt="图3">
+<p class="cap">图 3　tick 锯齿状：涨到约 2000 后归零</p>
+
+</body>
+</html>
