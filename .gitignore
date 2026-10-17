@@ -1,17 +1,11 @@
-# 构建产物
+# Build output
 build/
 *.o
-*.obj
+*.d
 *.elf
 *.hex
 *.bin
 *.map
-*.d
 *.su
-
-# 编辑器 / 系统
-.vscode/
-.idea/
 *.swp
-Thumbs.db
-desktop.ini
+.vscode/
