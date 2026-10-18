@@ -8,4 +8,6 @@ build/
 *.map
 *.su
 *.swp
+
+# Editor
 .vscode/

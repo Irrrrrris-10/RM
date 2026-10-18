@@ -60,8 +60,8 @@ constexpr CtrlMode_t kDefaultMode = CTRL_MODE_POSITION;
 // ---- 控制周期 ----
 constexpr float kDt = 0.001f;              // 1kHz
 
-// ---- 速度跟随曲线: v_ref(t) = A*sin(2πft) + offset  (单位 rad/s) ----
-// 第一次转动测试: 小幅值、低频率，确认方向和跟随后再加大。
+// ---- 速度跟随曲线: v_ref(t) = offset + A*sin(2πft)  (单位 rad/s) ----
+// 当前测试值: 幅值 8 rad/s，频率 0.2Hz，偏置 0，因此速度会在 ±8 rad/s 之间正反转。
 constexpr float kVelAmp    =  8.0f;
 constexpr float kVelFreq   = 0.2f;         // 0.2 Hz
 constexpr float kVelOffset = 0.0f;
@@ -86,7 +86,7 @@ constexpr float kDispAlpha = 0.05f;
 
 // 速度前馈: 电流给定 += kVelFF * v_ref
 // 用于提高正弦跟随的幅值/相位，并帮助越过零速死区。
-constexpr float kVelFF = 30.0f;   // counts per rad/s，先试 100~150
+constexpr float kVelFF = 30.0f;   // 电流前馈系数，单位 counts/(rad/s)
 
 // 零速摩擦补偿: 参考速度非零但电机仍卡在 0 时，给一个小电流帮助启动。
 constexpr bool  kUseFricComp = true;
@@ -197,7 +197,6 @@ extern "C" void MainTask(void) {
         vel_lpf += cfg::kVelLpfAlpha * (vel_raw - vel_lpf);
     }
 
-    /* 仅用于 Ozone 显示的平滑速度，不影响控制 */
     static float vel_disp = 0.0f;
     static bool  vel_disp_init = false;
 

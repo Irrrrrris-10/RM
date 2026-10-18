@@ -28,7 +28,6 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "main_task.hpp"
 #include "ControlTask.h"
 /* USER CODE END Includes */
 

@@ -28,7 +28,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
 project(project C CXX ASM) # TODO: change project name here
 
 # Specify user folders
-set(user_folders "Tasks" "components" "Resources") # TODO Add your own user folders here
+set(user_folders "Resources") # TODO Add your own user folders here
 
 # Specify the path to the HW-Components directory
 # set(HWC_DIR "HW-Components") # TODO: Set your own HW-Components path here
