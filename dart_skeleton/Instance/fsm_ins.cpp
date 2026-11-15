@@ -12,6 +12,7 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "fsm_ins.hpp"
+#include "main_fsm.hpp"
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
@@ -26,7 +27,8 @@ dart::MainFsm *CreateMainFsm(void)
    * 1. 在你的 Dart-Components/fsm/ 下设计 MainFsm 类（见 main_fsm.hpp TODO）。
    * 2. 静态定义对象（或用 getInstance），返回其地址。
    */
-  return nullptr;
+  static dart::MainFsm fsm;
+  return &fsm;
 }
 
 dart::BeltFsm *CreateBeltFsm(void)

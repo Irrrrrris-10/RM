@@ -26,7 +26,8 @@ hw_rc::DT7 *CreateRc(void)
    * 提示：DT7 类已提供（inc/DT7.hpp），静态定义对象并返回地址即可。
    *      串口接收与 decode() 调用由你在 Task/comm_task.cpp 接好。
    */
-  return nullptr;
+  static hw_rc::DT7 rc;
+  return &rc;
 }
 
 /* Private function definitions ----------------------------------------------*/
