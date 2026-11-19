@@ -30,6 +30,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "main_task.hpp"
+#include "rc_diag.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -72,6 +73,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  RcDiagBoot();
 
   /* USER CODE END 1 */
 

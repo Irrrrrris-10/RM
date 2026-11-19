@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "rc_diag.h"
 // #include "bsp_imu.h"
 // #include "tim.h"
 // #include "Servo.hpp"
@@ -309,6 +310,7 @@ void TIM3_IRQHandler(void)
 void USART1_IRQHandler(void)
 {
   /* USER CODE BEGIN USART1_IRQn 0 */
+  RcDiagUartIrq();
 // 	Dbus_UART_IRQHandler();
   /* USER CODE END USART1_IRQn 0 */
   HAL_UART_IRQHandler(&huart1);
@@ -380,6 +382,7 @@ void DMA2_Stream1_IRQHandler(void)
 void DMA2_Stream2_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA2_Stream2_IRQn 0 */
+  RcDiagDmaIrq();
 
   /* USER CODE END DMA2_Stream2_IRQn 0 */
   HAL_DMA_IRQHandler(&hdma_usart1_rx);

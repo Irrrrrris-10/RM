@@ -1,63 +1,33 @@
-/**
- *******************************************************************************
- * @file      : screw_fsm.hpp
- * @brief     : 预紧丝杆模块（M2006）——新人填写
- * @history   :
- *  Version     Date            Author          Note
- *  V1.0.0      2026-10-02      Hello World     1. 考核骨架：掏空丝杆控制逻辑
- *******************************************************************************
- * @attention :
- *  本文件已掏空。新人需自行设计并声明丝杆模块类（建议 namespace dart，类名
- *  ScrewFsm），负责丝杆的位置闭环保持。
- *******************************************************************************
- *  Copyright (c) 2024 Hello World Team, Zhejiang University.
- *  All Rights Reserved.
- *******************************************************************************
+/*
+ * 丝杆保持模块（考核自行实现）。Capture 保存触发时输出轴角度；位置环与速度环维持该位置，不执行连续旋转；检查离线、坐标重置、偏差和堵转。
  */
-/* Define to prevent recursive inclusion -------------------------------------*/
-#ifndef DART_COMPONENTS_SCREW_FSM_HPP_
-#define DART_COMPONENTS_SCREW_FSM_HPP_
-
-/* Includes ------------------------------------------------------------------*/
-/* Exported macro ------------------------------------------------------------*/
-/* Exported constants --------------------------------------------------------*/
-/* Exported types ------------------------------------------------------------*/
-/* Exported variables --------------------------------------------------------*/
-/* Exported function prototypes ----------------------------------------------*/
-
-/* ============================================================================
- * 【新人任务】设计预紧丝杆模块类 ScrewFsm（namespace dart）。
- *
- * !!! 安全红线（硬性验收项，违反直接不通过）!!!
- *   - **绝对禁止让 M2006 丝杆电机持续转动**：丝杆行程有限且原车无右侧限位，
- *     持续转动会直接顶坏机构（爆转）。
- *   - 丝杆只能由遥控器指令驱动（加分项的微调），且必须限幅、限速、限幅行程；
- *     单发流程中丝杆保持不动。
- *   - 没有遥控指令时不允许丝杆自行转动；待机 / 安全模式 / 遥控器离线时
- *     setInput(0)；需要保持时用位置闭环做小幅修正，不允许用常值电流一直顶。
- *
- * 硬件：
- *   - 一台 M2006（C610 电调），原始报文输入：
- *       丝杆：id = 3，方向反向，反馈 ID 0x203，与同步带共用发送帧 0x200。
- *   - 高度与电机输出角度换算：angle(rad) = π × height（即 height = angle / π）。
- *
- * 你要做：
- *   1. 位置闭环保持：上电后在安全范围内保持丝杆位置（预紧力高度），防止丝杆
- *      因重力自由下滑；单发流程中不主动改变目标。
- *   2. 安全：待机 / 离线 / 堵转时 setInput(0)；限幅电机输入。
- *   3. 加分项：通过遥控器摇杆微调预紧高度，并把当前高度作为保持目标。
- *
- * 约束 / 提示：
- *   - 生命状态（Dead/Resurrection/Working）已由 Dart-Components/fsm/fsm.hpp 的
- *     dart::Fsm 基类提供：直接继承并在 update() 中调用 updateWorkState()，
- *     不需要自己实现；你只需写 Working 态下的工作逻辑。
- *   - **骨架不提供电机类，也不提供 CAN 通信组件**：电机设备类（反馈帧解析 /
- *     控制帧打包 / 单位换算）与 CAN 底层（filter、发送、接收分发）都由你自己实现。
- *   - 参考：code_control/Dart2025/HW-Components/devices/motor/ 与 bsp/comm/
- *     （只看协议思路，注意去掉 Receiver/Transmitter 耦合）。
- *   - 丝杆行程有限，且原车无右侧限位，任何机动都必须限幅，坚决避免爆转。
- *   - 参考：code_control/Dart2025/Dart-Components/modules/screw/screw_fsm.cpp
- *     （只看思路，原工程还带步进电机自瞄，本骨架已删除）。
- * ==========================================================================*/
-
-#endif /* DART_COMPONENTS_SCREW_FSM_HPP_ */
+#pragma once
+#include "control_types.hpp"
+#include "control_config.hpp"
+namespace dart {
+class ScrewFsm {
+ public:
+ constexpr void Reset(){*this=ScrewFsm{};}
+ // 以当前输出轴角度作为本轮保持目标，并记录坐标代次。
+ constexpr void Capture(const MotorState& m){Reset();target_=m.output_angle;epoch_=m.epoch;}
+ constexpr float Update(const MotorState& m) {
+  if(!m.online){fault_=Fault::Offline;return 0;}
+  if(m.epoch!=epoch_){fault_=Fault::FeedbackReset;return 0;}
+  const float error=float(target_-m.output_angle);
+  if(Abs(error)>config::kScrewMaxError){fault_=Fault::ScrewTravel;return 0;}
+  if(fault_!=Fault::None)return 0;
+  // 位置误差经外环转换为速度目标。
+  const float speed=position_.Update(error,0,config::kPeriod);
+  // 速度内环根据反馈计算原始电流指令。
+  const float raw=velocity_.Update(speed,m.output_speed,config::kPeriod);
+  // 位置仍有误差、输出较大而速度极低时累计卡滞时间，否则归零。
+  stall_=Abs(error)>.02f && Abs(raw)>config::kScrewRawLimit*.7f && Abs(m.output_speed)<.01f?stall_+2:0;
+  if(stall_>=config::kJamMs){fault_=Fault::Stall;return 0;}
+  return raw;
+ }
+ constexpr Fault fault()const{return fault_;}
+ private:
+ double target_=0;uint32_t epoch_=0,stall_=0;Fault fault_=Fault::None;
+ Pid position_{config::kScrewPosition},velocity_{config::kScrewSpeed};
+};
+}

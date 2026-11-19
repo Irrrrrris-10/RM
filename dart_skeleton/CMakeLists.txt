@@ -19,7 +19,9 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
+if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
+endif()
 
 # ########################## USER CONFIG SECTION ##############################
 # Set the project name and the languages used
@@ -121,6 +123,9 @@ target_include_directories(drivers PUBLIC ${core_incs} ${drivers_incs})
 file(GLOB startup_file "${CMAKE_CURRENT_SOURCE_DIR}/*.s")
 add_executable(${PROJECT_NAME} ${project_srcs} ${startup_file})
 message(STATUS "Project name: ${PROJECT_NAME}")
+# Relink when the memory layout changes.
+set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+  "${CMAKE_SOURCE_DIR}/STM32F427IIHx_FLASH.ld")
 
 # Add the project includes to the executable
 target_include_directories(${PROJECT_NAME} PUBLIC ${project_incs})
@@ -139,3 +144,10 @@ add_custom_command(
   COMMAND ${CMAKE_OBJCOPY} -Oihex $<TARGET_FILE:${PROJECT_NAME}> ${HEX_FILE}
   COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${PROJECT_NAME}> ${BIN_FILE}
   COMMENT "Building ${HEX_FILE} Building ${BIN_FILE}")
+
+# Default build remains a non-actuating diagnostic image.
+option(DART_DIAGNOSTIC_MODE "Disable actuator output and feed watchdog from control scheduler" ON)
+option(DART_HARDWARE_CALIBRATED "Hardware directions, endstop current and servo timing verified" OFF)
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+  DART_DIAGNOSTIC_MODE=$<BOOL:${DART_DIAGNOSTIC_MODE}>
+  DART_HARDWARE_CALIBRATED=$<BOOL:${DART_HARDWARE_CALIBRATED}>)
