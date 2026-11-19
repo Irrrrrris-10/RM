@@ -1,0 +1,76 @@
+【历史阶段记录】当前版本以根目录 README_IMPLEMENTATION.txt 为准：UART已改18字节普通DMA；已加入完整控制模块和正式模式输出。
+
+遥控接收与安全调度联调（仅 dart_skeleton）
+
+本次范围
+- USART1/PB7，保留现有 100000 波特率、9 位含偶校验、1 停止位配置。
+- 使用 36 字节循环 DMA 缓冲，18 字节 IDLE 帧才解码；忽略 HT，TC 表示溢出，等待下一空闲边界重新同步。
+- 校验四轴、拨轮原始值 364~1684、拨杆非零及鼠标按钮。DBUS 无 CRC，合理性检查不能检测所有误码。
+- 无效帧/UART 错误使数据失效；100 ms 未更新判离线。串口错误非阻塞中止后重新接收。
+- TIM3 每 2 ms 调度，在线后使用已有 Fsm 的约 1 秒生命周期迁移，离线回 Dead。
+- Working 且左右拨杆都下为 OneShoot，其余为 Standby。进入模式后必须先松开内八再触发；保持内八不重复计数。
+- 内八只增加诊断计数，不执行发射。CAN、PWM、模块输出未接入，output_enabled 恒为 0。
+- 仅在收到有效帧且控制周期有推进时喂 IWDG。失联后会发生看门狗复位，诊断计数随之清零。
+
+Ozone 上板步骤
+1. 本轮保持电机动力断开，仅给主控和接收机正常供电。
+2. 先打开已配对遥控器，两拨杆都向上，摇杆松开。
+3. 加载 E:\RM\dart_skeleton\build\Dart2025.elf，下载并运行。
+4. 添加全局变量 g_rc_debug、g_safety_debug 到观察窗口。
+5. 检查 valid_frames、cycles 持续增长；last_size=18、online=1、timer_started=1。
+6. 在线约 1 秒后 work_state=2；拨杆都向上时 left=1、right=1、one_shoot=0。
+7. 逐一操作摇杆，检查 lh/lv/rh/rv 变化，回中约 0，极限约正负 1；拨杆上/中/下分别为 1/3/2。
+8. 双下且松开摇杆后 one_shoot=1；做内八，trigger_events 增加 1；保持不再增加，松开后再内八增加 1。
+9. 任一拨杆离开下档，one_shoot=0。全过程 output_enabled=0。
+10. 关闭遥控器，预期 100 ms 后 online=0、work_state=0，随后看门狗复位。可在 MainTask 中离线分支下条件断点捕获；复位会清零变量。
+
+调试注意
+- 先运行再暂停查看；长时间停在接收断点会丢帧，继续运行后的瞬时接收错误不能当作稳定运行结果。
+- 若接收机失联仍输出看似正常的帧，本固件不能仅靠时间戳判断射频失联，必须实测接收机的失联行为。
+- 本轮未验证真实 UART 波形、DMA 中断时序和机械安全动作；离线测试不能替代上板测试。
+- 不需要重新 Generate Code，本轮没有修改 CubeMX 外设配置。
+
+验证命令（在 E:\RM\dart_skeleton 执行）
+cmake --preset Debug
+cmake --build --preset Debug
+arm-none-eabi-g++ -std=c++20 -Wall -Wextra -Werror -I Task -c tests/rc_safety_test.cpp -o build/rc_safety_test.o
+最后一条通过 static_assert 执行编译期测试：合法/非法帧、长度、原始值边界、时间戳回绕、启动保持内八、模式切换、失联与重新连接、非 Working 禁止触发。
+
+后续工作
+接收链路实测通过后，再实现 CAN 电机协议、反馈离线检测和执行器安全输出，并将当前诊断层整合进完整 MainFsm。当前版本不宣称已实现电机 setInput(0) 或舵机回安全角。
+
+
+诊断增强版（2026-11-15）
+重新下载新的 build/Dart2025.elf 后，添加 g_rc_diag 和 g_rc_previous。
+运行 2~3 秒后暂停查看；运行时仍按有效帧与调度进度喂狗，暂停时冻结 IWDG。
+原来的 g_rc_debug 和 g_safety_debug 继续可用。
+
+优先查看 g_rc_diag：
+- boot_count：连续暖复位启动次数；重新下载、断电或掉电不能保证保留。
+- reset_iwdg=1：此次启动读到了看门狗复位标志；reset_csr 保存原始 RCC 标志（原因可同时存在）。
+- previous_available=1：g_rc_previous 是上一次启动结束前的诊断记录，可查看复位前是否出现过接收事件。
+- uart_irq、dma_irq：进入中断处理函数的次数。
+- idle_events、tc_events：HAL 空闲/满缓冲回调次数。HT 主动关闭，ht_events 正常为零。
+- valid_frames、invalid_frames、error_events：有效帧、被拒绝的 IDLE 帧、串口错误次数。
+- last_uart_error：HAL 错误码位掩码，1=校验、2=噪声、4=帧错误、8=溢出、16=DMA。
+- start_attempts、start_status、abort_status、abort_completions：接收启动和中止恢复诊断；状态 0=HAL_OK、1=ERROR、2=BUSY、3=TIMEOUT。
+- event_type：HAL 定义 0=TC、1=HT、2=IDLE；事件计数全零时默认 0 不代表发生 TC。
+- event_size、raw_size、raw：最近一次接收事件及对应缓冲内容，raw_size 之外字节已清零。
+- reject_reason：0=有效/尚未判断（结合计数）；1=满缓冲/溢出；2=长度不是18；3=轴或拨轮超范围；4=拨杆值0；5=鼠标按钮异常。
+- ndtr、ndtr_min、sample_ndtr_after、sampled_raw：周期采样时 DMA 剩余长度、最低观察值、拷贝后的长度以及原始36字节缓冲。
+- uart_cr1/cr3/brr、dma_cr、gpio_moder/afrl/idr、uart_irq_enabled/dma_irq_enabled：配置与引脚现场。
+- pclk2_hz 是 HAL 按配置计算的时钟，不是物理测量结果。
+
+集中判断：
+1. tc_events>0、idle_events=0：确实有 DMA 数据，优先检查空闲中断/帧间隔，不能再判断为完全无输入。
+2. idle_events>0、invalid_frames>0：有数据到达回调，按 reject_reason 和 raw 判断帧格式。
+3. error_events>0：按 last_uart_error 排查信号极性、串口时序与 DMA。
+4. ndtr_min<36 或 sampled_raw 有内容，而中断计数为零：进一步检查中断使能、DMA标志；不能只凭此项确定故障。
+5. 当前和上一轮启动都无接收活动：重点检查信号是否到达 PB7，同时核对寄存器及引脚现场。
+6. reset_iwdg=1 且 boot_count 增加：确认复位确由看门狗参与触发，不再仅凭 cycles 变小猜测。
+
+限制：
+- .noinit 为普通 SRAM 的 NOLOAD 段，启动不清零。只用于暖复位诊断，非掉电存储；下载器也可能改写 RAM。
+- previous_available 验证版本标记且排除上电/掉电标志，不是完整性校验。复位打断更新时可能留下不完整的最后事件。
+- DMA 与 CPU 并行，原始快照不是示波器记录；TC 后 DMA 已回卷，raw 可能在极端连续流下变化。
+- 未修改收帧策略或放宽校验。执行器仍禁用，未实现的执行器安全动作没有因此补齐。

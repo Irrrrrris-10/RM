@@ -1,0 +1,35 @@
+阶段 D：PID 类与离线测试
+
+文件：inc/pid.hpp；tests/pid_test.cpp。
+运行全部离线断言：powershell -ExecutionPolicy Bypass -File tests/run_offline_tests.ps1
+需要 arm-none-eabi-g++ 在 PATH；测试在编译期求值，失败返回非零，不需要硬件或运行 ARM 可执行文件。
+
+接口与单位
+Pid::Config 按顺序为 kp、ki、kd、integral_limit、output_limit、dt。
+dt 单位秒，默认 0.002；PID 采用位置式，update(target, measurement, enabled)。
+积分状态存储 Ki*积分(error*dt) 的输出贡献，不是未经缩放的误差积分。
+微分项对测量值求导，首周期为零；目标跳变不会单独产生微分冲击。
+输出限幅与积分限幅均为对称上下界；限值 0 表示钳制为 0，不表示无限制。
+增益必须非负，方向交给电机协议层处理。
+饱和且积分变化会进一步加剧饱和时不接受积分更新；反向误差允许释放积分。
+reset 清除积分、输出和微分历史，保留配置；configure 重新配置并复位。
+非法配置使 valid=false，update 返回零；NaN/无穷输入或 disabled 清状态并返回零。
+默认构造未配置，不产生输出。
+
+调用示例（仅接口示例，非实车调参建议）
+dart::Pid position_pid;
+position_pid.configure({kp, ki, kd, integral_output_limit, raw_output_limit, 0.002f});
+const float raw = position_pid.update(target_rad, feedback_rad, motion_allowed);
+
+后续接入约束
+本阶段未实例化到执行器，CAN 仍保持零输出。
+禁用、离线、急停、找零失效时，应每周期传 enabled=false 或显式 reset。
+位置反馈应使用同一输出轴坐标；下发 raw 电流前仍经过电机限幅和统一安全判断。
+真实 PID 增益、限幅和允许行程需低能量实车调试确定；协议最大电流不等于推荐调试电流。
+微分未加低通滤波，使用 Kd 前需评估编码器噪声；2 ms 中断执行时间待硬件测量。
+
+已验证
+P 正负限幅；积分输出限幅；禁用及复位；持续正负饱和后恢复；微分起始与目标阶跃；
+非法增益/限幅/周期；NaN/无穷输入；零输出限幅；2 ms 简化一阶系统的正负目标收敛。
+仿真模型 dy/dt=-y+u，仅为算法回归，不能证明真实机构稳定、无超调或已调参。
+阶段 D 的同步带、丝杆、击发模块尚未实现。

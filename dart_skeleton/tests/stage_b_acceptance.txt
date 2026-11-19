@@ -1,0 +1,31 @@
+阶段 B 验收说明
+
+实现范围
+USART1/PB7：循环 DMA + IDLE，36 字节缓冲；只有 IDLE 边界的 18 字节帧可通过校验。
+拒绝短帧、超长帧、通道越界、拨杆值 0、非法鼠标按键值；错误后重新接收。
+遥控失联阈值为 100 ms（inc/rc_safety.hpp），并非电机的 50 ms 阈值。
+有效帧解包后唯一一次喂 IWDG；安全档的有效帧也喂狗。
+TIM3 500 Hz 调用 MainTask + CommTask；安全档或离线使生命周期回 Dead。
+双下进入 OneShoot，经过约 1 秒进入 Working；只有持续内八才 motion_authorized。
+当前所有电机命令始终为 0，舵机目标始终 95 度，没有启动 CAN 或舵机 PWM。
+后续阶段必须把安全目标接到实际执行器，不能把阶段 B 当作实机急停已验收。
+
+自动验证
+cmake --preset Debug
+cmake --build --preset Debug
+arm-none-eabi-g++ -std=c++20 -Iinc -c tests/rc_safety_test.cpp -o build/rc_safety_test.o
+测试通过编译期断言验证帧范围、拨杆、长度、100 ms 边界和 uint32 计时回绕。
+
+上板检查（尚未执行）
+1. 调试器观察 CreateRc() 的字段；遥控器保持开启，验证摇杆/拨杆对应关系。
+2. 观察 CreateMainFsm()：上电安全档为 Dead/Standby；双下约 1 秒后 Working。
+3. 内八保持时 motion_authorized 为真；松开或切安全档后最迟下一控制周期变假。
+4. 关闭遥控器：最后有效帧 100 ms 后（加最多 2 ms 调度延迟）offline；约 1 秒 IWDG 复位。
+5. 注入短帧/非法通道/非法拨杆/超长帧：不喂狗，下一正常帧恢复接收。
+6. 验证断开/重连、UART 错误恢复；连续有效安全档数据不应引起看门狗复位。
+7. 调试器暂停可能影响复位观察，验收 IWDG 时使用自由运行方式。
+
+限制
+DBUS 本身无 CRC；字段范围校验不能保证拒绝所有噪声数据。
+本阶段未实现单发步骤、单发重触发锁、CAN 电机驱动或实体舵机安全回位。
+保留原工程 RWX 链接警告；未修改 CubeMX 配置和提供的 DT7/Fsm/Servo 接口。

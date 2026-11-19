@@ -1,0 +1,28 @@
+【历史阶段记录】当前版本以根目录 README_IMPLEMENTATION.txt 为准：UART已改18字节普通DMA；已加入完整控制模块和正式模式输出。
+
+诊断模式与 CAN 电机反馈
+
+当前 Dart-Configs/diagnostic_config.hpp 的 kDiagnosticMode=true。
+仅用于输出禁用的联调：TIM3 完成 MainTask 和 CommTask 后喂 IWDG，因此遥控未连接不会引起约1秒反复复位。
+调度停止仍会超时复位；g_safety_debug.output_enabled 恒为0。未发送任何 CAN 控制帧，未启动舵机 PWM。
+诊断模式不满足考核中“关遥控器约1秒复位”的正式验收要求。正式验收前将该编译期开关改为 false 并重新构建；不得用诊断模式放行执行器。
+
+CAN1：PD0 RX、PD1 TX，正常模式（会对有效 CAN 帧应答），现有时序 42MHz/(3*14)=1Mbps。
+全接收滤波到 FIFO0，软件仅解析标准数据帧 0x201~0x203、DLC=8、编码器范围0~8191。
+每次回调最多处理3帧，防止忙总线使单次中断无限循环。FIFO 溢出记录表示至少观察到一次溢出，不是精确丢帧数。
+
+Ozone 加载并重新下载 build/Dart2025.elf 后观察：
+- g_safety_debug.diagnostic_mode=1、output_enabled=0，cycles 持续增加。
+- g_can_debug.started=1；filter_status/start_status/notification_status 均为0表示成功，0xffffffff 表示尚未执行该步骤。
+- g_can_debug.bitrate=1000000（按工程时钟计算，非物理测量）。
+- g_can_debug.rx_frames：总接收帧数；unknown_frames：其他ID/扩展/远程帧；rejected_frames：目标ID但长度或角度错误。
+- g_can_debug.motors[0]：0x201，同步带右；[1]：0x202，同步带左；[2]：0x203，丝杆。
+- 每台 frames/tick/angle/rpm/current_raw/temperature 分别是有效帧计数、最近时间、转子编码器、转子转速、有符号原始电流、协议第6字节。
+- online_mask：bit0/1/2 对应三台电机，7表示三台最近50ms均有有效反馈；0表示全部离线或尚未收到反馈。
+- error_code、esr、fifo_overruns 用于检查 CAN 状态。在线与否独立于遥控器。
+
+仅完成反馈阶段：未实现多圈位置、减速比与方向换算、PID或电机控制发送。温度按考核清单第6字节保存，实际电调若将其定义为保留位，则不能把该值当有效温度。
+运行状态下没有控制帧不等于主动制动，也不能防止机构因重力移动；给电调供电前固定机构。
+
+验证：固件构建；tests/motor_feedback_test.cpp 的编译期测试覆盖大端/负数/非法长度/角度/ID过滤/50ms离线与时钟回绕；原遥控安全测试回归。
+尚未上板验证 CAN 接线、终端电阻及电调ID。不需要重新 Generate Code。

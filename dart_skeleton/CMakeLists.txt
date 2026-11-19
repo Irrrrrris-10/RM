@@ -1,0 +1,153 @@
+# ##############################################################################
+# #################        CMake Template (CUSTOM)       ######################
+# #################    Copyright (c) 2023 Hello World    ######################
+# ##############################################################################
+
+# Set the system name and version
+set(CMAKE_SYSTEM_VERSION 1)
+
+# Specify the minimum required version of CMake
+cmake_minimum_required(VERSION 3.22)
+
+include("cmake/gcc-arm-none-eabi.cmake")
+
+# Set the C++ and C standards
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS ON)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS ON)
+
+if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
+endif()
+
+# ########################## USER CONFIG SECTION ##############################
+# Set the project name and the languages used
+project(Dart2025 C CXX ASM)
+
+# Specify user folders
+# 新人的代码目录写在这里（需先手动创建对应文件夹），例如：
+#   set(user_folders "Instance" "Task" "Dart-Components")
+set(user_folders "Dart-Components" "Dart-Configs" "Instance" "Task")
+
+# 收集 root_dir 及其所有子目录，作为头文件搜索路径
+function(collect_includes root_dir res_list)
+  set(dirs ${root_dir})
+  file(GLOB_RECURSE children LIST_DIRECTORIES true RELATIVE ${root_dir}
+       ${root_dir}/*)
+  foreach(child ${children})
+    if(IS_DIRECTORY ${root_dir}/${child})
+      list(APPEND dirs ${root_dir}/${child})
+    endif()
+  endforeach()
+  set(${res_list}
+      ${dirs}
+      PARENT_SCOPE)
+endfunction()
+
+# Enable preprocessing for assembler files
+add_compile_options($<$<COMPILE_LANGUAGE:ASM>:-x$<SEMICOLON>assembler-with-cpp>)
+
+# Disable some warnings
+set(COM_FLAGS
+    "-Wno-unused-parameter -Wno-missing-field-initializers -Wno-pedantic -Wno-unknown-pragmas"
+)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COM_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COM_FLAGS} -Wno-reorder")
+
+add_subdirectory(cmake/stm32cubemx)
+get_target_property(STM32_COMPILE_DEFINES stm32cubemx
+                    INTERFACE_COMPILE_DEFINITIONS)
+list(APPEND STM32_COMPILE_DEFINES DEBUG) # Add DEBUG definition
+foreach(STM32_COMPILE_DEFINE ${STM32_COMPILE_DEFINES})
+  # Exclude the element if it starts with "$"
+  if(STM32_COMPILE_DEFINE MATCHES "^\\$")
+    continue()
+  endif()
+  add_definitions(-D${STM32_COMPILE_DEFINE})
+
+  # Get HAL filename
+  if(STM32_COMPILE_DEFINE MATCHES "STM32[A-Z][0-9]")
+    string(SUBSTRING ${STM32_COMPILE_DEFINE} 0 7 STM32_DEVICE)
+    string(TOLOWER ${STM32_DEVICE} stm32_hal_filename)
+    string(CONCAT stm32_hal_filename ${stm32_hal_filename} "xx_hal.h")
+    message(STATUS "HAL file name: ${stm32_hal_filename}")
+    # Set macro for the HAL filename
+    add_definitions(-DSTM32_HAL_FILENAME="${stm32_hal_filename}")
+  endif()
+endforeach()
+
+# #################### ADD LIBRARIES AND EXECUTABLE SECTION ####################
+# Initialize source and include lists
+set(project_srcs)
+set(project_incs)
+
+# Core 目录
+collect_includes("${CMAKE_CURRENT_SOURCE_DIR}/Core" core_incs)
+file(GLOB_RECURSE core_srcs "Core/*.c")
+list(APPEND project_srcs ${core_srcs})
+list(APPEND project_incs ${core_incs})
+
+# Drivers 目录（STM32 HAL / CMSIS）
+collect_includes("${CMAKE_CURRENT_SOURCE_DIR}/Drivers" drivers_incs)
+file(GLOB_RECURSE drivers_srcs "Drivers/*.c")
+list(APPEND project_incs ${drivers_incs})
+
+# 组件目录：inc/ 放头文件，src/ 放源文件
+collect_includes("${CMAKE_CURRENT_SOURCE_DIR}/inc" component_incs)
+file(GLOB_RECURSE component_srcs "src/*.c*")
+list(APPEND project_srcs ${component_srcs})
+list(APPEND project_incs ${component_incs})
+
+# 新人自定义目录
+foreach(user_folder ${user_folders})
+  set(search_path "${CMAKE_CURRENT_SOURCE_DIR}/${user_folder}")
+
+  if(NOT EXISTS ${search_path})
+    message(FATAL_ERROR "${user_folder}(${search_path}) does not exist")
+  endif()
+
+  collect_includes("${search_path}" ${user_folder}_incs)
+  file(GLOB_RECURSE ${user_folder}_srcs "${search_path}/*.c*")
+  list(APPEND project_incs ${${user_folder}_incs})
+  list(APPEND project_srcs ${${user_folder}_srcs})
+endforeach()
+
+# Add a static library for the drivers
+add_library(drivers STATIC ${drivers_srcs})
+target_include_directories(drivers PUBLIC ${core_incs} ${drivers_incs})
+
+# Add an executable for the project
+file(GLOB startup_file "${CMAKE_CURRENT_SOURCE_DIR}/*.s")
+add_executable(${PROJECT_NAME} ${project_srcs} ${startup_file})
+message(STATUS "Project name: ${PROJECT_NAME}")
+# Relink when the memory layout changes.
+set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+  "${CMAKE_SOURCE_DIR}/STM32F427IIHx_FLASH.ld")
+
+# Add the project includes to the executable
+target_include_directories(${PROJECT_NAME} PUBLIC ${project_incs})
+
+# Link the drivers library to the executable
+target_link_libraries(${PROJECT_NAME} PUBLIC drivers)
+
+# Define the output hex and bin files
+set(HEX_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.hex)
+set(BIN_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.bin)
+
+# Add a post-build command to generate the hex and bin files
+add_custom_command(
+  TARGET ${PROJECT_NAME}
+  POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY} -Oihex $<TARGET_FILE:${PROJECT_NAME}> ${HEX_FILE}
+  COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${PROJECT_NAME}> ${BIN_FILE}
+  COMMENT "Building ${HEX_FILE} Building ${BIN_FILE}")
+
+# Default build remains a non-actuating diagnostic image.
+option(DART_DIAGNOSTIC_MODE "Disable actuator output and feed watchdog from control scheduler" ON)
+option(DART_HARDWARE_CALIBRATED "Hardware directions, endstop current and servo timing verified" OFF)
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+  DART_DIAGNOSTIC_MODE=$<BOOL:${DART_DIAGNOSTIC_MODE}>
+  DART_HARDWARE_CALIBRATED=$<BOOL:${DART_HARDWARE_CALIBRATED}>)
